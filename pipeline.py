@@ -10,25 +10,58 @@ class classy:
     def __init__(self):
         self.data = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_subset'
         self.min_vehicle_area = 400
+        self.batch_size = 64
 
 opt = classy()
 """
 
-def process_images():
-    pass
 
+def bbox_crop(image: tf.Tensor, offset_height: int, offset_width: int, target_height: int, target_width: int):
+    """
+    Crops an image according to bounding box coordinates
+    :param image: 4-D Tensor of shape [batch, height, width, channels] or 3-D Tensor of shape [height, width, channels]
+    :param offset_height: Vertical coordinate of the top-left corner of the bounding box in image.
+    :param offset_width: Horizontal coordinate of the top-left corner of the bounding box in image.
+    :param target_height: Height of the bounding box.
+    :param target_width: Width of the bounding box.
+    :return: 4- or 3-D tensor
+    """
+    return tf.image.crop_to_bounding_box(image, offset_height, offset_width, target_height, target_width)
+
+def resize(image: tf.Tensor, height: int, width: int):
+    """
+    :param image: 4d tensor of shape [batch, height, width, channels] or 3-D Tensor of shape [height, width, channels]
+    :param height: int, pixel height
+    :param width: int, pixel width
+    :return: A tensor of desired resized dimensions
+    """
+    return tf.image.resize(image, [height, width], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+
+def process_image(image: tf.Tensor, bboxes: tf.Tensor):
+    """
+    Processes tensor of images
+    :param image: 4-d tensor of shape [batch, heigh, width, channels]
+    :param bboxes: 2-d tensor of shape [batch, n_vehicles_per_image]
+    :return: 4-d tensor of image tensors
+    """
+    image = bbox_crop(image, bboxes[0], bboxes[1], bboxes[2], bboxes[3])
+    image = resize(image, height=224, width=224)  # imagenet uses 224 x 224 so we stick with this
+    return image
 
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, help='path to image directory', required=True)
     parser.add_argument('--min-vehicle-area', type=int, default=400, help='YOLOv5 minimum object size in square pixels, else ignored')
-
+    parser.add_argument('--batch-size', type=int, default=64, help='batch size for vehicle make-model classification')
     return parser.parse_args()
 
 def main(opt):
 
     # Load YOLOv5 weights
     yolov5_weights = torch.hub.load('yolov5', 'custom', path='./yolov5/yolov5s.pt', source='local')
+
+    # Load Make-Model-Classifier weights
+    mm_weights = tf.keras.models.load_model('model_weights')
 
     # Continuously scan image directory for new images
     history = []  # history of all previously seen images
@@ -60,18 +93,34 @@ def main(opt):
                 continue
 
             # Restict to bounding boxes themselves
-            bboxes = coordinates[:, :4]
+            bboxes = coordinates[:, :4]  # Format: xyxy
 
             # Bounding box area -> keep only those above minimum threshold
-            area = (bboxes[:, 3] - bboxes[:, 1]) * (bboxes[:, 2] - bboxes[:, 0])  # Format: xyxy
-            bboxes = bboxes[area > opt.min_vehicle_area].astype(int)
+            area = (bboxes[:, 3] - bboxes[:, 1]) * (bboxes[:, 2] - bboxes[:, 0])
+            bboxes = bboxes[area > opt.min_vehicle_area]
+
+            # If none adequately size, move on to next image
+            if len(bboxes) == 0:
+                continue
+
+            # Cast to int
+            bboxes = bboxes.astype(int)
+
+            # Rearrange bounding boxes to tensorflow's preferred: y1, x1, y2-y1, x2-x1
+            yx = np.concatenate((bboxes[:, 1].reshape(len(bboxes), 1), bboxes[:, 0].reshape(len(bboxes), 1)), axis=1)
+            y_delta = np.subtract(bboxes[:, 3], bboxes[:, 1]).reshape(len(bboxes), 1)
+            x_delta = np.subtract(bboxes[:, 2], bboxes[:, 0]).reshape(len(bboxes), 1)
+            bboxes = np.concatenate((yx, y_delta, x_delta), axis=1)
 
             ##################################
             ##### Convert to tf dataset ######
             ##################################
 
-            data = tf.data.Dataset.from_tensor_slices(([np.copy(arr)] * len(bboxes), bboxes))
+            arr_4d = np.array([np.copy(arr)] * len(bboxes))  # batched in case > 1 vehicle in image
+            data = tf.data.Dataset.from_tensor_slices((arr_4d, tf.cast(bboxes, tf.int32)))
+            data = data.map(process_image, num_parallel_calls=tf.data.AUTOTUNE).batch(opt.batch_size)
 
+            pred = mm_weights.predict(data)
 
 
             history.append(file)
