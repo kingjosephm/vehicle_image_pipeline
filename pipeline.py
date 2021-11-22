@@ -8,6 +8,7 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.offsetbox import (TextArea, AnnotationBbox)
+import onnxruntime as rt
 
 
 def bbox_crop(image: tf.Tensor, offset_height: int, offset_width: int, target_height: int, target_width: int):
@@ -55,8 +56,8 @@ def main(opt):
     # Load YOLOv5 weights
     yolov5_weights = torch.hub.load('yolov5', 'custom', path='./yolov5/yolov5s.pt', source='local')
 
-    # Load Make-Model-Classifier weights
-    mm_weights = tf.keras.models.load_model('model_weights')
+    # Load Make-Model-Classifier Onnx weights
+    mm_weights = rt.InferenceSession('./model_weights/model.onnx', providers=['CPUExecutionProvider'])
 
     # Load label mapping
     with open('label_mapping.json') as f:
@@ -69,7 +70,7 @@ def main(opt):
         current = os.listdir(opt.input_dir)
         new = [i for i in current if i not in history if "jpg" in i or "png" in i]
 
-        for file in new:
+        for file in new[:110]:
 
             ##################
             ##### YOLOv5 #####
@@ -119,11 +120,14 @@ def main(opt):
             data = tf.data.Dataset.from_tensor_slices((arr_4d, tf.cast(bboxes_rearranged, tf.int32)))
             data = data.map(process_image, num_parallel_calls=tf.data.AUTOTUNE).batch(opt.batch_size)
 
+            # Convert from tensorflow graph execution to eager tensor, then numpy array
+            array = tf.cast(next(iter(data)), dtype=tf.float32).numpy()
+
             # Make prediction
-            pred = mm_weights.predict(data)
+            pred = mm_weights.run(['dense_2'], {'input': array})
 
             # Get argmax per object in image
-            argmax0 = np.argmax(pred, axis=1)
+            argmax0 = np.argmax(pred[0], axis=1)
 
             # Affix labels
             labels = [label_map[str(i)] for i in argmax0]
