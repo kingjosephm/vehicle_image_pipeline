@@ -7,17 +7,7 @@ import numpy as np
 import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-
-"""
-class classy:
-    def __init__(self):
-        self.input_dir = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_subset'
-        self.min_vehicle_area = 400
-        self.batch_size = 64
-        self.output_dir = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_output'
-
-opt = classy()
-"""
+from matplotlib.offsetbox import (TextArea, AnnotationBbox)
 
 
 def bbox_crop(image: tf.Tensor, offset_height: int, offset_width: int, target_height: int, target_width: int):
@@ -79,7 +69,7 @@ def main(opt):
         current = os.listdir(opt.input_dir)
         new = [i for i in current if i not in history if "jpg" in i or "png" in i]
 
-        for file in new[:9]:
+        for file in new:
 
             ##################
             ##### YOLOv5 #####
@@ -142,9 +132,11 @@ def main(opt):
             plt.cla()
             ax = plt.gca()
             ax.imshow(arr)
-            for rect in bboxes_rearranged:
+            for num, rect in enumerate(bboxes_rearranged):
                 rec = Rectangle((rect[1], rect[0]), rect[3], rect[2], linewidth=1, edgecolor='r', facecolor='none')
                 ax.add_patch(rec)
+                ab = AnnotationBbox(TextArea(labels[num], textprops=dict(color='red')), xy=(rect[1], rect[0]), box_alignment=(0, 0), frameon=False)
+                ax.add_artist(ab)
             plt.axis('off')
             plt.tight_layout()
             plt.savefig(os.path.join(opt.output_dir, file), bbox_inches='tight', pad_inches=0)
@@ -152,8 +144,6 @@ def main(opt):
             history.append(file)
 
         sleep(1)  # delay 1 second before checking if more images
-
-
 
 
 if __name__ == '__main__':
