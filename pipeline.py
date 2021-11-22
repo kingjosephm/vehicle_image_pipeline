@@ -47,7 +47,6 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', type=str, help='directory path where input images located', required=True)
     parser.add_argument('--min-vehicle-area', type=int, default=400, help='YOLOv5 minimum object size in square pixels, else ignored')
-    parser.add_argument('--batch-size', type=int, default=64, help='batch size for vehicle make-model classification')
     parser.add_argument('--output-dir', type=str, help='directory path to where output images should be placed')
     return parser.parse_args()
 
@@ -70,7 +69,7 @@ def main(opt):
         current = os.listdir(opt.input_dir)
         new = [i for i in current if i not in history if "jpg" in i or "png" in i]
 
-        for file in new[:110]:
+        for file in new:
 
             ##################
             ##### YOLOv5 #####
@@ -95,9 +94,9 @@ def main(opt):
             # Restict to bounding boxes themselves
             bboxes = coordinates[:, :4]  # Format: xyxy
 
-            # Bounding box area -> keep only those above minimum threshold
+            # Bounding box area -> keep largest
             area = (bboxes[:, 3] - bboxes[:, 1]) * (bboxes[:, 2] - bboxes[:, 0])
-            bboxes = bboxes[area > opt.min_vehicle_area]
+            bboxes = bboxes[np.argmax(area)]
 
             # If none adequately size, move on to next image
             if len(bboxes) == 0:
@@ -107,18 +106,18 @@ def main(opt):
             bboxes = bboxes.astype(int)
 
             # Rearrange bounding boxes to tensorflow's preferred: y1, x1, y2-y1, x2-x1
-            yx = np.concatenate((bboxes[:, 1].reshape(len(bboxes), 1), bboxes[:, 0].reshape(len(bboxes), 1)), axis=1)
-            y_delta = np.subtract(bboxes[:, 3], bboxes[:, 1]).reshape(len(bboxes), 1)
-            x_delta = np.subtract(bboxes[:, 2], bboxes[:, 0]).reshape(len(bboxes), 1)
-            bboxes_rearranged = np.concatenate((yx, y_delta, x_delta), axis=1)
+            yx = np.concatenate((np.array([bboxes[1]]), np.array([bboxes[0]])))
+            y_delta = np.array([bboxes[3] - bboxes[1]])
+            x_delta = np.array([bboxes[2] - bboxes[0]])
+            bboxes_rearranged = np.expand_dims(np.concatenate((yx, y_delta, x_delta), axis=0), axis=0)
 
             ##################################
             ##### Convert to tf dataset ######
             ##################################
 
-            arr_4d = np.array([np.copy(arr)] * len(bboxes))  # batched in case > 1 vehicle in image
+            arr_4d = np.array([np.copy(arr)] * 1)
             data = tf.data.Dataset.from_tensor_slices((arr_4d, tf.cast(bboxes_rearranged, tf.int32)))
-            data = data.map(process_image, num_parallel_calls=tf.data.AUTOTUNE).batch(opt.batch_size)
+            data = data.map(process_image, num_parallel_calls=tf.data.AUTOTUNE).batch(1)
 
             # Convert from tensorflow graph execution to eager tensor, then numpy array
             array = tf.cast(next(iter(data)), dtype=tf.float32).numpy()
