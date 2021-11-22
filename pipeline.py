@@ -4,13 +4,17 @@ import torch
 import os
 from time import sleep
 import numpy as np
+import json
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 """
 class classy:
     def __init__(self):
-        self.data = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_subset'
+        self.input_dir = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_subset'
         self.min_vehicle_area = 400
         self.batch_size = 64
+        self.output_dir = '/Users/josephking/Documents/sponsored_projects/MERGEN/data/vehicle_classifier/scraped_output'
 
 opt = classy()
 """
@@ -50,9 +54,10 @@ def process_image(image: tf.Tensor, bboxes: tf.Tensor):
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, help='path to image directory', required=True)
+    parser.add_argument('--input-dir', type=str, help='directory path where input images located', required=True)
     parser.add_argument('--min-vehicle-area', type=int, default=400, help='YOLOv5 minimum object size in square pixels, else ignored')
     parser.add_argument('--batch-size', type=int, default=64, help='batch size for vehicle make-model classification')
+    parser.add_argument('--output-dir', type=str, help='directory path to where output images should be placed')
     return parser.parse_args()
 
 def main(opt):
@@ -63,20 +68,24 @@ def main(opt):
     # Load Make-Model-Classifier weights
     mm_weights = tf.keras.models.load_model('model_weights')
 
+    # Load label mapping
+    with open('label_mapping.json') as f:
+        label_map = json.load(f)
+
     # Continuously scan image directory for new images
     history = []  # history of all previously seen images
     while True:
 
-        current = os.listdir(opt.data)
+        current = os.listdir(opt.input_dir)
         new = [i for i in current if i not in history if "jpg" in i or "png" in i]
 
-        for file in new:
+        for file in new[:9]:
 
             ##################
             ##### YOLOv5 #####
             ##################
 
-            results = yolov5_weights(os.path.join(opt.data, file))  # run YOLOv5 model
+            results = yolov5_weights(os.path.join(opt.input_dir, file))  # run YOLOv5 model
 
             arr = np.squeeze(np.array(results.imgs))  # return 3-d np.array of image
             coordinates = results.xyxy[0].numpy()  # bounding box coordinates for all objects
@@ -110,22 +119,39 @@ def main(opt):
             yx = np.concatenate((bboxes[:, 1].reshape(len(bboxes), 1), bboxes[:, 0].reshape(len(bboxes), 1)), axis=1)
             y_delta = np.subtract(bboxes[:, 3], bboxes[:, 1]).reshape(len(bboxes), 1)
             x_delta = np.subtract(bboxes[:, 2], bboxes[:, 0]).reshape(len(bboxes), 1)
-            bboxes = np.concatenate((yx, y_delta, x_delta), axis=1)
+            bboxes_rearranged = np.concatenate((yx, y_delta, x_delta), axis=1)
 
             ##################################
             ##### Convert to tf dataset ######
             ##################################
 
             arr_4d = np.array([np.copy(arr)] * len(bboxes))  # batched in case > 1 vehicle in image
-            data = tf.data.Dataset.from_tensor_slices((arr_4d, tf.cast(bboxes, tf.int32)))
+            data = tf.data.Dataset.from_tensor_slices((arr_4d, tf.cast(bboxes_rearranged, tf.int32)))
             data = data.map(process_image, num_parallel_calls=tf.data.AUTOTUNE).batch(opt.batch_size)
 
+            # Make prediction
             pred = mm_weights.predict(data)
 
+            # Get argmax per object in image
+            argmax0 = np.argmax(pred, axis=1)
+
+            # Affix labels
+            labels = [label_map[str(i)] for i in argmax0]
+
+            # Affix bounding boxes to image
+            plt.cla()
+            ax = plt.gca()
+            ax.imshow(arr)
+            for rect in bboxes_rearranged:
+                rec = Rectangle((rect[1], rect[0]), rect[3], rect[2], linewidth=1, edgecolor='r', facecolor='none')
+                ax.add_patch(rec)
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(os.path.join(opt.output_dir, file), bbox_inches='tight', pad_inches=0)
 
             history.append(file)
 
-        sleep(1)  # delay 1 second
+        sleep(1)  # delay 1 second before checking if more images
 
 
 
