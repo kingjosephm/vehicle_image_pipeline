@@ -47,6 +47,7 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', type=str, help='directory path where input images located', required=True)
     parser.add_argument('--min-vehicle-area', type=int, default=400, help='YOLOv5 minimum object size in square pixels, else ignored')
+    parser.add_argument('--pixel-dilation', type=int, default=5, help='Number of pixels to expand YOLOv5 bounding box by')
     parser.add_argument('--output-dir', type=str, help='directory path to where output images should be placed')
     return parser.parse_args()
 
@@ -105,10 +106,15 @@ def main(opt):
             # Cast to int
             bboxes = bboxes.astype(int)
 
+            # Pixel dilation of bounding box
+            img_dims = np.array(results.imgs).shape  # necessary to ensure dilated bounding box within image dims
+            dilated = np.array([max(bboxes[0] - opt.pixel_dilation, 0), max(bboxes[1] - opt.pixel_dilation, 0),
+                                min(bboxes[2] + opt.pixel_dilation, img_dims[2]), min(bboxes[3] + opt.pixel_dilation, img_dims[1])])
+
             # Rearrange bounding boxes to tensorflow's preferred: y1, x1, y2-y1, x2-x1
-            yx = np.concatenate((np.array([bboxes[1]]), np.array([bboxes[0]])))
-            y_delta = np.array([bboxes[3] - bboxes[1]])
-            x_delta = np.array([bboxes[2] - bboxes[0]])
+            yx = np.concatenate((np.array([dilated[1]]), np.array([dilated[0]])))
+            y_delta = np.array([dilated[3] - dilated[1]])
+            x_delta = np.array([dilated[2] - dilated[0]])
             bboxes_rearranged = np.expand_dims(np.concatenate((yx, y_delta, x_delta), axis=0), axis=0)
 
             ##################################
